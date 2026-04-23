@@ -14,13 +14,53 @@ description: >
 
 # Skill: Analizador de Blueprints de Make
 
-Genera un análisis completo de un blueprint de Make exportado en JSON. El output tiene
-tres partes bien diferenciadas: revisión crítica con mejoras propuestas, documentación
-técnica detallada, y documentación explicativa para cualquier persona del equipo.
+Genera un análisis completo de un blueprint de Make exportado en JSON y produce
+un archivo `.md` listo para subir a GitHub. El output tiene diez secciones:
+revisión crítica con mejoras, documentación técnica, documentación de JSONs con
+diagrama de dependencias, conexiones requeridas, documentación explicativa,
+checklist de instalación parametrizada, tabla de variables por cliente, protocolo
+de verificación post-instalación, y dos secciones de estructura vacía para que
+el autor complete: decisiones técnicas y errores conocidos.
 
 ---
 
 ## Flujo de trabajo
+
+### 0. Preguntar qué se necesita
+
+Antes de analizar nada, usar `ask_user_input_v0` para presentar un menú
+interactivo con botones. Esto permite generar solo lo que se necesita en
+cada momento en lugar de producir siempre el documento completo.
+
+```
+Pregunta: "¿Qué quieres hacer con este blueprint?"
+Tipo: multi_select (puede elegir varias opciones)
+Opciones:
+  - 📋 Documentación completa (todas las secciones)
+  - 🔍 Solo revisión y mejoras
+  - 🔐 Solo auditoría de seguridad
+  - 📦 Solo documentación de JSONs y dependencias
+  - 🚀 Solo checklist de instalación para cliente nuevo
+  - 📖 Solo documentación explicativa (para el cliente)
+```
+
+Según la selección, ejecutar solo las secciones correspondientes:
+
+| Opción seleccionada | Secciones a generar |
+|---|---|
+| Documentación completa | 1 → 10 |
+| Revisión y mejoras | Sección 1 |
+| Auditoría de seguridad | Subsección 🔐 de Sección 1 |
+| JSONs y dependencias | Subsección JSONs de Sección 2 |
+| Checklist instalación | Secciones 6 + 7 + 8 |
+| Documentación explicativa | Sección 3 |
+
+Si el usuario selecciona "Documentación completa" o múltiples opciones que
+cubran todo el documento, generar el `.md` completo en outputs. Si selecciona
+una o pocas secciones concretas, entregar el resultado directamente en el chat
+sin crear archivo, salvo que el usuario lo pida explícitamente.
+
+---
 
 ### 1. Parsear el blueprint
 
@@ -63,7 +103,7 @@ convergencia.
 
 ---
 
-## Output: tres secciones obligatorias
+## Output: diez secciones obligatorias
 
 ### SECCIÓN 1 — Revisión y mejoras
 
@@ -100,6 +140,88 @@ Aspectos a revisar siempre:
 - Módulos sin nombre en el designer
 - Constantes de negocio mezcladas con datos dinámicos sin separación visual
 
+**🔐 Seguridad y conexiones:**
+
+Revisar siempre estos patrones — son los más frecuentes al migrar escenarios entre
+cuentas y los más difíciles de detectar a simple vista:
+
+- Variables en `SetVariables` cuyos nombres sugieren credenciales: buscar `token`,
+  `key`, `api`, `secret`, `password`, `bearer`, `auth` (case insensitive). Si
+  contienen valores reales en texto plano, marcar como riesgo de seguridad y
+  recomendar moverlas al keychain.
+- Módulos `http:MakeRequest` que tienen `authenticationType: apiKey` en parameters
+  pero además un header `Authorization` manual en el mapper — el keychain no está
+  bien configurado, el token está duplicado y expuesto en el blueprint.
+- Módulos `http:MakeRequest` con `authenticationType: noAuth` que llaman a URLs
+  de APIs externas que típicamente requieren autenticación.
+- Headers con valores que empiezan por `Bearer ` hardcodeados directamente en el
+  mapper en lugar de gestionarse por keychain.
+- Variables definidas en un módulo CONFIG que deberían vivir en el keychain.
+
+**Patrón crítico — token en CONFIG + header manual que lo inyecta:**
+
+Este es el patrón de mayor riesgo y el más difícil de detectar porque
+el keychain puede parecer correcto a primera vista. Tiene dos partes que
+hay que cruzar:
+
+*Paso 1 — Detectar el token expuesto en el módulo CONFIG:*
+En el `mapper.variables` de cualquier `util:SetVariables` cuyo nombre
+de diseñador contenga "CONFIG" o "config" o "ajuste", buscar variables
+cuyos nombres incluyan `token`, `key`, `api`, `secret`, `password`,
+`bearer` o `auth` (case insensitive) **y cuyo valor sea texto plano**
+(no una referencia `{{...}}` a otro módulo). Esos valores son
+credenciales hardcodeadas que quedan expuestas en el blueprint exportado.
+
+*Paso 2 — Detectar que ese token se inyecta como header manual:*
+Para cada variable credencial encontrada en el paso 1, buscar en todos
+los módulos `http:MakeRequest` si algún header del `mapper.headers[]`
+referencia esa variable mediante `{{ID_modulo.nombre_variable}}`. Si
+lo hace, el token no solo está expuesto en el CONFIG — también se está
+usando para sobreescribir o duplicar la autenticación del keychain.
+
+*Cuando se confirma el patrón, reportar así:*
+```
+🔐 [SEGURIDAD CRÍTICA] Token expuesto en texto plano + inyectado como header manual
+Módulos afectados:
+  - Módulo X (CONFIG): variable `nombre_variable` = "VALOR_REAL_DEL_TOKEN"
+  - Módulo Y (http:MakeRequest): header Authorization = "Bearer {{X.nombre_variable}}"
+
+Situación: El módulo Y tiene un keychain configurado correctamente
+(apiKeyKeychain: ID_KEYCHAIN, label: "Nombre del keychain"), pero el
+header manual del mapper sobreescribe la autenticación del keychain con
+el token en texto plano. El token queda visible en cualquier exportación
+del blueprint.
+
+Corrección: eliminar la variable del módulo CONFIG y eliminar el header
+Authorization del mapper del módulo HTTP. El keychain ya está configurado
+y gestionará la autenticación. Si el keychain aún no tiene el token
+correcto, actualizarlo en Connections antes de eliminar el header manual.
+```
+
+*Distinguir si el keychain ya existe o no:*
+- Si `parameters.apiKeyKeychain` tiene un ID numérico real → el keychain
+  **ya existe**, solo hay que eliminar el header manual y la variable CONFIG.
+- Si `parameters.apiKeyKeychain` está vacío o no existe → el keychain
+  **no está configurado**, hay que crearlo primero antes de eliminar el
+  header manual (si se elimina antes, la autenticación dejará de funcionar).
+
+Para cada issue de seguridad detectado, incluir instrucciones exactas de
+configuración del keychain:
+
+```
+Connections → Add connection → API Key
+  Key name:               [Nombre descriptivo]
+  Key:                    Bearer TU_TOKEN   ← incluir prefijo "Bearer " si la API lo requiere
+  API key placement:      In the header
+  API Key parameter name: Authorization     ← o el header específico que use la API
+```
+
+> Advertencia clave: Make inyecta el valor del campo "Key" tal cual como valor
+> del header. Si la API espera `Authorization: Bearer TOKEN`, el campo Key debe
+> contener `Bearer TOKEN` completo — no solo el token. Sin el prefijo, la
+> autenticación falla silenciosamente y parece que el keychain no funciona, lo
+> que lleva a añadir el token como header manual (exponiéndolo en el blueprint).
+
 Si no hay issues en alguna categoría, indícalo explícitamente ("No se detectaron
 bugs en las expresiones").
 
@@ -109,8 +231,22 @@ bugs en las expresiones").
 
 Orientada a quien va a mantener o modificar el escenario. Incluye:
 
+**Conexiones requeridas:**
+Antes del detalle de módulos, listar todas las conexiones que necesita el escenario.
+Detectarlas buscando en el JSON:
+- `__IMTCONN__` en `parameters` → conexión nativa (Holded, Gmail, etc.) — mostrar
+  la label del `restore.parameters.__IMTCONN__.label`
+- `apiKeyKeychain` en `parameters` → conexión API Key — mostrar la label del
+  `restore.parameters.apiKeyKeychain.label`
+
+Para cada conexión indicar:
+- Nombre de la conexión en Make
+- Qué módulos la usan
+- Cómo crearla — especialmente para API Keys, incluir los campos exactos y
+  advertencias de configuración (ej: el prefijo `Bearer ` para APIs que lo requieren)
+
 **Cabecera:**
-- Nombre, zona, tipo (instant/scheduled), conexiones usadas, webhook si aplica
+- Nombre, zona, tipo (instant/scheduled), webhook si aplica
 
 **Propósito:**
 - Qué hace el escenario en una o dos frases
@@ -142,41 +278,69 @@ separadamente con la fórmula y su significado.
 Tabla con todas las variables de scope roundtrip: nombre, dónde se define,
 dónde se lee, descripción.
 
-**Estructuras de datos personalizadas:**
-Si el blueprint contiene módulos `json:CreateJSON` con un `parameters.type` numérico
-(ID de Data Structure), documentar cada estructura en su propia subsección. Para cada
-una extraer el esquema completo del campo `expect` del módulo.
+**Estructuras de datos personalizadas (json:CreateJSON):**
 
-Formato de cada estructura:
+Documentar **todos** los módulos `json:CreateJSON` del escenario, tengan o no
+Data Structure registrada en Make. Para cada uno:
+
+**Propósito inferido:** Determinar qué hace este JSON analizando:
+- El módulo inmediatamente posterior que lo consume (¿se envía a un endpoint HTTP?
+  ¿se parsea? ¿alimenta otro JSON?)
+- Los campos que contiene (si tiene `contactId`, `items[]`, `date` → es cuerpo de
+  creación de documento; si tiene `name`, `email` → es creación de contacto, etc.)
+- El nombre del módulo en el designer si lo tiene
+
+Formato de cada JSON:
 
 ```markdown
-### `Nombre de la estructura` (ID: XXXXXX)
-**Usada en:** Módulo N — Nombre del módulo
-**Propósito:** Para qué sirve esta estructura.
+### JSON N — `Nombre del módulo en designer` (Módulo ID)
+**Propósito:** Descripción en una frase de qué representa este JSON y por qué
+existe (no solo qué contiene, sino para qué se necesita construirlo así).
+**Consumido por:** Módulo ID+1 — nombre — [tipo de consumo: enviado a API /
+parseado / alimenta otro JSON]
+**Endpoint destino** (si aplica): MÉTODO https://url/del/endpoint
 
-| Campo | Tipo | Requerido | Descripción |
+| Campo | Tipo | Valor en este escenario | Origen del valor |
 |---|---|---|---|
-| `campo` | tipo | Sí/No | descripción |
+| `campo` | string/number/array/object | `{{expresión o literal}}` | Módulo X / hardcoded / CONFIG |
 
-**Ejemplo de uso en este escenario:**
-\`\`\`json
-{
-  "campo": "valor_real_del_mapper"
-}
-\`\`\`
+**Notas:** Campos opcionales omitidos, advertencias sobre el formato, dependencias
+con otros JSONs del escenario.
 ```
 
-Reglas para documentar estructuras:
-- El nombre de la estructura viene del campo `restore.parameters.type.label` del módulo
-- Los campos y tipos vienen del `expect` del módulo
-- El ejemplo se construye con los valores reales del `mapper` del módulo, no con
-  valores genéricos — así quien lo copie entiende exactamente qué se está enviando
-- Si un campo del `expect` no aparece en el `mapper`, incluirlo igualmente en la tabla
-  marcándolo como No requerido y con valor vacío en el ejemplo
-- Documentar todas las estructuras aunque sean similares — cada una puede usarse
-  de forma independiente en otro escenario
-- Añadir una nota al final de la sección si alguna estructura referencia a otra
-  (ej: el campo `items` de la estructura de documento usa la estructura de líneas)
+**Diagrama de dependencias entre JSONs:**
+
+Cuando hay múltiples `json:CreateJSON` en el escenario, generar siempre un
+diagrama ASCII que muestre cómo se relacionan entre sí y con los endpoints:
+
+```
+[M21] json:CreateJSON "Líneas de factura"
+    │  Construye array items[]
+    ▼
+[M26] json:CreateJSON "Cuerpo factura"  ←── [M23] GetVariables (contactId, date)
+    │  Embebe items[] + metadatos
+    ▼
+[M27] json:ParseJSON
+    │
+    ▼
+[M20] http → POST /invoices (Holded)
+```
+
+Reglas del diagrama:
+- Mostrar el ID y nombre corto de cada módulo JSON
+- Indicar qué dato fluye por cada flecha
+- Incluir los módulos que alimentan cada JSON (GetVariables, SetVariables)
+- Incluir el endpoint final al que llega el JSON construido
+- Si un JSON no llega directamente a un HTTP sino que alimenta otro JSON,
+  mostrarlo con una flecha lateral
+
+**Por qué se construyen los JSONs a mano:**
+Si el escenario usa `json:CreateJSON` para llamar a una API que tiene módulo
+nativo en Make (ej: Holded), inferir y documentar el motivo probable:
+- El módulo nativo no expone todos los campos necesarios
+- La estructura requiere arrays anidados que el módulo nativo no soporta
+- Se necesita control exacto sobre campos opcionales/nulos
+Marcar como `[inferido]` si no hay evidencia explícita en el blueprint.
 
 ---
 
@@ -215,17 +379,182 @@ listo para producción, se puede activar cambiando un ajuste."
 
 ---
 
+### SECCIÓN 6 — Checklist de instalación en cliente nuevo
+
+Generar una checklist parametrizada y accionable. No genérica — usar los nombres
+reales de conexiones, módulos y variables del escenario.
+
+Estructura:
+
+```markdown
+## Checklist de instalación — [Nombre del escenario]
+
+### Antes de importar el blueprint
+- [ ] Obtener del cliente: [listar exactamente qué credenciales/datos necesitas,
+      ej: "API Key de ThriveCart" / "credenciales de Holded" / "ID de plantilla de email"]
+
+### Conexiones a crear (en este orden)
+- [ ] **[Nombre conexión 1]** — Tipo: [API Key / OAuth / nativa]
+      Cómo crearla: Connections → Add → [pasos específicos]
+      ⚠️ [Advertencia si aplica, ej: incluir prefijo "Bearer " en el campo Key]
+- [ ] **[Nombre conexión 2]** ...
+
+### Configurar módulo CLIENT (si existe)
+- [ ] Campo `[nombre]`: [qué valor poner y cómo obtenerlo]
+
+### Configurar módulo CONFIG
+- [ ] `[variable]`: [valor por defecto] → cambiar a [qué] para este cliente
+- [ ] `[flag]`: false → cambiar a true cuando [condición]
+
+### Webhook
+- [ ] Copiar URL del webhook de Make
+- [ ] Configurarlo en [plataforma origen] → [ruta exacta en esa plataforma]
+
+### Verificación (ver Sección 8)
+- [ ] Ejecutar evento de prueba
+- [ ] Confirmar resultado esperado
+- [ ] Activar escenario en producción
+```
+
+---
+
+### SECCIÓN 7 — Qué cambia por cliente vs qué es fijo
+
+Tabla que separa claramente las dos categorías para instalaciones rápidas:
+
+```markdown
+## Variables por instalación
+
+| Variable / Ajuste | Módulo | Valor por defecto | Qué poner en cada cliente |
+|---|---|---|---|
+| `[variable]` | CONFIG | `[valor]` | [instrucción concreta] |
+
+## Constantes del escenario (no tocar)
+
+| Elemento | Módulo | Valor | Por qué es fijo |
+|---|---|---|---|
+| `[constante]` | [módulo] | `[valor]` | [motivo] |
+```
+
+Inferir qué es fijo vs variable analizando:
+- Variables del módulo CONFIG → candidatas a cambiar por cliente
+- IDs hardcodeados en mappers intermedios → probablemente fijos del escenario
+- URLs de endpoints → fijas (son de la API) salvo que haya entornos staging/prod
+- Flags booleanos de entorno → variables (controlan comportamiento en prod vs test)
+
+---
+
+### SECCIÓN 8 — Protocolo de verificación post-instalación
+
+Instrucciones concretas para confirmar que el escenario funciona antes de
+entregarlo al cliente. Inferir el protocolo del tipo de trigger y del flujo:
+
+```markdown
+## Protocolo de verificación
+
+### Evento de prueba
+- **Qué lanzar:** [descripción del evento de prueba — ej: "completar una compra
+  de prueba en ThriveCart con el producto X en modo sandbox"]
+- **Dónde lanzarlo:** [plataforma / ruta]
+
+### Qué debe ocurrir en Make
+| Paso | Módulo | Resultado esperado | Cómo verificarlo |
+|---|---|---|---|
+| 1 | [Webhook] | Recibe el payload | Ver "Input" del módulo en el historial |
+| 2 | [CONFIG] | Variables inicializadas | Ver "Output" → comprobar valores |
+| ... | | | |
+
+### Resultado final esperado
+- **En [sistema destino]:** [qué debe haberse creado/modificado y dónde verlo]
+- **Confirmación visual:** [qué pantalla abrir y qué buscar]
+
+### Si algo falla
+- Primero comprobar: [el punto más frecuente de fallo en este escenario]
+- Ver Sección 10 (Errores conocidos) para diagnóstico detallado
+```
+
+---
+
+### SECCIÓN 9 — Decisiones técnicas *(completar manualmente)*
+
+Generar la estructura vacía. No inventar contenido — dejar las filas en blanco
+para que el autor las rellene con su conocimiento del caso.
+
+```markdown
+## Decisiones técnicas
+
+> Esta sección recoge el "por qué está construido así". Rellénala justo después
+> de terminar la instalación, cuando el razonamiento está fresco.
+
+| Decisión | Alternativa descartada | Motivo |
+|---|---|---|
+| Se construye el JSON de factura manualmente con `json:CreateJSON` en lugar de usar el módulo nativo de Holded | Módulo nativo `holded:createDocument` | |
+| | | |
+| | | |
+
+> Añade una fila por cada decisión de diseño no obvia del escenario.
+```
+
+Regla: pre-rellenar la columna "Decisión" con las decisiones técnicas que sí
+son visibles en el blueprint (ej: uso de JSON manual cuando existe módulo nativo,
+rutas paralelas en lugar de secuenciales, variables roundtrip en lugar de
+pasarlas por mapper...). Dejar "Alternativa descartada" y "Motivo" en blanco.
+
+---
+
+### SECCIÓN 10 — Errores conocidos y resolución *(completar manualmente)*
+
+Generar la estructura vacía con columnas relevantes para el tipo de escenario.
+
+```markdown
+## Errores conocidos y resolución
+
+> Documenta aquí cada error que encuentres durante instalaciones o en producción.
+> Esta tabla es tu base de conocimiento de soporte para este escenario.
+
+| Síntoma | Cuándo ocurre | Causa probable | Solución | Módulo afectado |
+|---|---|---|---|---|
+| | | | | |
+| | | | | |
+
+> Ejemplos de síntomas a documentar: "El escenario se ejecuta pero no crea la
+> factura", "Error 401 en el módulo HTTP", "El contacto se duplica en Holded",
+> "El webhook no recibe el payload de ThriveCart".
+```
+
+---
+
 ## Formato de entrega
 
-Si el usuario pide un archivo (markdown, Word, etc.), genera las tres secciones
-en ese formato. Si no especifica, entrégalo en markdown directamente en el chat,
-con las tres secciones claramente separadas por encabezados de nivel 2.
+El output **siempre** es un archivo `.md` guardado en `/mnt/user-data/outputs/`
+con el nombre `[nombre-escenario]-docs.md`. Nunca entregar el output solo en
+el chat — siempre crear el archivo.
+
+Estructura del archivo:
+
+```markdown
+# [Nombre del escenario]
+> Generado: [fecha]  |  Blueprint: [nombre del archivo JSON]
+
+---
+## Índice
+1. [Revisión y mejoras](#revisión-y-mejoras)
+2. [Documentación técnica](#documentación-técnica)
+3. [JSONs — estructura y dependencias](#jsons--estructura-y-dependencias)
+4. [Conexiones requeridas](#conexiones-requeridas)
+5. [Documentación explicativa](#documentación-explicativa)
+6. [Checklist de instalación](#checklist-de-instalación)
+7. [Qué cambia por cliente](#qué-cambia-por-cliente)
+8. [Protocolo de verificación](#protocolo-de-verificación)
+9. [Decisiones técnicas](#decisiones-técnicas)
+10. [Errores conocidos](#errores-conocidos)
+---
+[secciones 1-10]
+```
 
 Usa tablas para las variables siempre que haya más de 3. Usa bloques de código
-para expresiones Make y para el diagrama ASCII del flujo.
-
-Longitud: sin límite artificial. La documentación debe ser completa. Es preferible
-pecar de exhaustivo que dejar huecos.
+para expresiones Make y para los diagramas ASCII. Sin límite de longitud —
+la documentación debe ser completa. Es preferible pecar de exhaustivo que dejar huecos.
 
 ---
 
