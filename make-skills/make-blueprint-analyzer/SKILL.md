@@ -336,11 +336,17 @@ en qué orden crearlas cuando hay dependencias entre JSONs del mismo escenario.
 **Reglas para generar el JSON de muestra:**
 - Usar valores de ejemplo realistas, del mismo tipo que los reales (string → texto
   corto, number → número plausible, boolean → false, array → un elemento de muestra)
-- Si el campo es un array de strings (ej: `taxes: ["s_ipsi4"]`), representarlo como
+- La **forma del JSON raíz** debe coincidir exactamente con la forma del mapper:
+  - Si el mapper raíz es un objeto (`{ "campo": ... }`) → el JSON de muestra es un objeto
+  - Si el mapper raíz es un array (`[ { ... } ]`) → el JSON de muestra es un array
+  - ⚠️ Un mapper con un campo `items: [...]` dentro de un objeto raíz NO es un array
+    raíz — es un objeto. Error frecuente: pegar un array raíz cuando el mapper es
+    `{ "items": [ {...} ] }` genera una DS incorrecta que rompe el ParseJSON posterior.
+- Si un campo es un array de strings (ej: `taxes: ["s_ipsi4"]`), representarlo como
   `["valor_ejemplo"]`
-- Si el campo es un array de objetos (ej: `items[]`), representarlo con un objeto
-  completo dentro del array
-- Si el campo es un timestamp Unix (ej: `date`), usar un número entero de 10 dígitos
+- Si un campo es un array de objetos (ej: `items: [{...}]`), representarlo con un
+  objeto completo dentro del array
+- Si un campo es un timestamp Unix (ej: `date`), usar un número entero de 10 dígitos
 - Nunca poner `null` como valor de muestra — Make no infiere el tipo desde null
 - Nunca omitir campos opcionales que estén en el mapper, aunque estén vacíos en el
   blueprint: ponerlos como `""` para que Make los incluya en la Data Structure
