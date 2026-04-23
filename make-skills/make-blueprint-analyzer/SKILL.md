@@ -351,6 +351,41 @@ en qué orden crearlas cuando hay dependencias entre JSONs del mismo escenario.
 - Nunca omitir campos opcionales que estén en el mapper, aunque estén vacíos en el
   blueprint: ponerlos como `""` para que Make los incluya en la Data Structure
 
+**⚠️ Error crítico frecuente — Array of Text en lugar de Array of Collection:**
+
+Cuando el Generator de Make infiere una DS que contiene un array de objetos
+(ej: `items: [ { "sku": "", "desc": "", ... } ]`), puede tipar el array como
+`Array → item type: Text` en lugar de `Array → item type: Collection`. Esto
+hace que al serializar el JSON final, Make envuelva cada objeto en comillas
+escapadas, produciendo un array de strings en lugar de un array de objetos:
+
+```
+❌ "items": ["{\"sku\":null,\"desc\":\"Pago único\",...}"]   ← string escapado
+✅ "items": [{"sku": null, "desc": "Pago único", ...}]       ← objeto correcto
+```
+
+La API destino recibe un string donde espera un objeto y falla silenciosamente
+o crea el registro con datos incorrectos.
+
+**Cómo detectarlo:** abrir la DS del módulo afectado → campo `items` → si
+"Array Item Specification → Type" es `Text`, está mal.
+
+**Cómo corregirlo:**
+1. Editar la DS: campo `items` → Array Item Specification → Type → cambiar
+   `Text` a `Collection`
+2. Añadir los subcampos de la colección uno a uno con su tipo correcto
+3. Guardar la DS
+4. Volver al módulo `json:CreateJSON` que la usa y verificar que el mapping
+   de `items` sigue apuntando a la variable correcta (Make puede resetearlo
+   al modificar la DS)
+
+**En la documentación:** para cada campo que sea `Array of Collections`,
+documentar explícitamente los subcampos con su tipo Make en la tabla, y añadir
+una nota en el JSON de muestra indicando que Make puede inferirlo mal y que hay
+que verificar el tipo del array tras crear la DS con el Generator.
+
+---
+
 **Aviso sobre Data Structures al migrar a cuenta nueva:**
 
 Make **no exporta las Data Structures** al exportar un blueprint. Al importarlo
@@ -371,6 +406,9 @@ en este orden (respetar el orden si hay dependencias entre JSONs):
    - json:CreateJSON → campo "Data structure" → Add → Generator
    - Pegar el JSON de muestra de la sección JSON 1 → Save
    - Nombre: `[Nombre exacto]`
+   - ⚠️ Si la DS contiene arrays de objetos, verificar que "Array Item
+     Specification → Type" es `Collection` y no `Text`. Si Make lo infiere
+     como Text, corregirlo manualmente añadiendo los subcampos de la colección.
 
 2. **[Nombre DS 2]** → módulo [ID]
    ...
