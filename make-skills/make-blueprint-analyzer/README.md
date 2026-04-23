@@ -16,13 +16,13 @@ Detecta credenciales expuestas en texto plano en módulos CONFIG, tokens inyecta
 Para quien mantiene el escenario. Incluye diagrama del flujo, detalle módulo a módulo con tablas de variables y sus fórmulas, referencia global de todas las variables, y documentación completa de conexiones requeridas con instrucciones de creación.
 
 **4. Documentación de JSONs y dependencias**
-Para cada `json:CreateJSON` del escenario: propósito inferido por contexto, tabla de campos con origen de cada valor, y un diagrama ASCII que muestra cómo fluyen los JSONs entre sí hasta llegar al endpoint final. Incluye nota sobre por qué se construyen a mano cuando existe módulo nativo.
+Para cada `json:CreateJSON` del escenario: propósito inferido por contexto, tabla de campos con el tipo Make exacto de cada uno (Text / Number / Boolean / Array / Collection), el JSON de muestra listo para pegar en el Generator de Make, y un diagrama ASCII que muestra cómo fluyen los JSONs entre sí hasta llegar al endpoint final. Incluye aviso de recreación de Data Structures al migrar a cuenta nueva, orden correcto de creación cuando hay dependencias vía `json:ParseJSON`, y nota sobre por qué se construyen a mano cuando existe módulo nativo.
 
 **5. Documentación explicativa**
 Para cualquier persona del equipo sin conocimientos de Make. Explica qué hace el escenario, qué pasa paso a paso en lenguaje de negocio, qué casos cubre y qué genera al final.
 
 **6. Checklist de instalación parametrizada**
-No genérica — usa los nombres reales de conexiones, módulos y variables del escenario. Lista exactamente qué credenciales pedir al cliente, cómo crear cada conexión, qué configurar en el módulo CONFIG y cómo configurar el webhook.
+No genérica — usa los nombres reales de conexiones, módulos y variables del escenario. Lista exactamente qué credenciales pedir al cliente, cómo crear cada conexión, cómo recrear las Data Structures con el JSON de muestra de cada módulo, qué configurar en CONFIG y CLIENT, y cómo configurar el webhook.
 
 **7. Qué cambia por cliente vs qué es fijo**
 Tabla que separa las variables que hay que ajustar en cada instalación de las constantes del escenario que no se tocan.
@@ -43,6 +43,7 @@ Tabla para acumular síntomas, causas y soluciones de errores encontrados en ins
 - Sospechas que hay un bug o un problema de seguridad y quieres una revisión sistemática
 - Quieres exportar la estructura de un JSON para reutilizarla en otro escenario
 - Tienes un blueprint que no has tocado en meses y necesitas entender qué hace
+- Vas a migrar un escenario a otra cuenta y necesitas los JSONs de muestra para recrear las Data Structures
 
 ## Cómo usarla
 
@@ -65,6 +66,7 @@ También puedes pedirlo directamente en texto:
 "auditoría de seguridad de este blueprint"
 "genera el checklist de instalación para cliente nuevo"
 "qué hace este flujo?"
+"me llevo este blueprint a otra cuenta, qué tengo que hacer"
 ```
 
 Si pides documentación completa, genera un `.md` listo para subir a GitHub.
@@ -88,6 +90,12 @@ Si pides una sección concreta, entrega el resultado directamente en el chat.
 - Código residual: variables definidas pero nunca leídas, lógica duplicada
 - Módulos sin nombre en el designer
 - Constantes de negocio mezcladas con datos dinámicos
+
+**Data Structures:**
+- Detecta todos los módulos `json:CreateJSON` y extrae su Data Structure ID y nombre del blueprint
+- Genera un JSON de muestra por cada módulo, listo para pegar en el Generator de Make
+- Identifica el orden correcto de recreación cuando hay dependencias entre JSONs vía `json:ParseJSON`
+- Avisa que Make no exporta las Data Structures con el blueprint y que hay que recrearlas manualmente en la cuenta destino
 
 ## Formato de salida
 

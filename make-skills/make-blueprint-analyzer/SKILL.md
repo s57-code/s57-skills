@@ -299,13 +299,79 @@ existe (no solo qué contiene, sino para qué se necesita construirlo así).
 **Consumido por:** Módulo ID+1 — nombre — [tipo de consumo: enviado a API /
 parseado / alimenta otro JSON]
 **Endpoint destino** (si aplica): MÉTODO https://url/del/endpoint
+**Data Structure ID en blueprint:** [ID numérico del campo `parameters.type`] —
+[Nombre de la Data Structure si figura en `restore.parameters.type.label`]
 
-| Campo | Tipo | Valor en este escenario | Origen del valor |
+| Campo | Tipo Make | Valor / Expresión | Origen |
 |---|---|---|---|
-| `campo` | string/number/array/object | `{{expresión o literal}}` | Módulo X / hardcoded / CONFIG |
+| `campo` | Text / Number / Boolean / Array / Collection | `{{expresión o literal}}` | Módulo X / hardcoded / CONFIG |
 
-**Notas:** Campos opcionales omitidos, advertencias sobre el formato, dependencias
-con otros JSONs del escenario.
+**JSON de muestra para recrear la Data Structure:**
+Pegar en Make → módulo json:CreateJSON → Data structure → Generator:
+‣ Si el JSON raíz es un objeto:
+  ```json
+  {
+    "campo1": "valor_ejemplo",
+    "campo2": 123,
+    "campo3": false,
+    "campoArray": ["item1"],
+    "campoObjeto": { "subcampo": "valor" }
+  }
+  ```
+‣ Si el JSON raíz es un array (estructura items[]):
+  ```json
+  [
+    {
+      "campo1": "valor_ejemplo",
+      "campo2": 123
+    }
+  ]
+  ```
+
+**Notas de reinstalación:** indicar si la Data Structure puede importarse
+automáticamente al importar el blueprint o si hay que recrearla manualmente, y
+en qué orden crearlas cuando hay dependencias entre JSONs del mismo escenario.
+```
+
+**Reglas para generar el JSON de muestra:**
+- Usar valores de ejemplo realistas, del mismo tipo que los reales (string → texto
+  corto, number → número plausible, boolean → false, array → un elemento de muestra)
+- Si el campo es un array de strings (ej: `taxes: ["s_ipsi4"]`), representarlo como
+  `["valor_ejemplo"]`
+- Si el campo es un array de objetos (ej: `items[]`), representarlo con un objeto
+  completo dentro del array
+- Si el campo es un timestamp Unix (ej: `date`), usar un número entero de 10 dígitos
+- Nunca poner `null` como valor de muestra — Make no infiere el tipo desde null
+- Nunca omitir campos opcionales que estén en el mapper, aunque estén vacíos en el
+  blueprint: ponerlos como `""` para que Make los incluya en la Data Structure
+
+**Aviso sobre Data Structures al migrar a cuenta nueva:**
+
+Make **no exporta las Data Structures** al exportar un blueprint. Al importarlo
+en otra cuenta, todos los módulos `json:CreateJSON` aparecerán con la Data
+Structure en rojo ("Data structure not found"). Hay que recrearlas manualmente
+antes de que el escenario pueda ejecutarse.
+
+Incluir siempre este bloque en la documentación cuando hay `json:CreateJSON`:
+
+```markdown
+### ⚠️ Recrear Data Structures tras importar el blueprint
+
+Make no exporta las Data Structures con el blueprint. Al importarlo en una
+cuenta nueva, los módulos json:CreateJSON aparecerán con error. Recrearlas
+en este orden (respetar el orden si hay dependencias entre JSONs):
+
+1. **[Nombre DS 1]** → módulo [ID]
+   - json:CreateJSON → campo "Data structure" → Add → Generator
+   - Pegar el JSON de muestra de la sección JSON 1 → Save
+   - Nombre: `[Nombre exacto]`
+
+2. **[Nombre DS 2]** → módulo [ID]
+   ...
+
+> El orden importa cuando un json:ParseJSON intermedio alimenta otro
+> json:CreateJSON: si la primera DS no está creada, el ParseJSON no
+> tiene schema y el siguiente CreateJSON no puede mapear sus campos.
 ```
 
 **Diagrama de dependencias entre JSONs:**
@@ -317,11 +383,11 @@ diagrama ASCII que muestre cómo se relacionan entre sí y con los endpoints:
 [M21] json:CreateJSON "Líneas de factura"
     │  Construye array items[]
     ▼
+[M27] json:ParseJSON   ← necesita DS de M21 para tener schema
+    │  items[] tipado
+    ▼
 [M26] json:CreateJSON "Cuerpo factura"  ←── [M23] GetVariables (contactId, date)
     │  Embebe items[] + metadatos
-    ▼
-[M27] json:ParseJSON
-    │
     ▼
 [M20] http → POST /invoices (Holded)
 ```
@@ -333,6 +399,8 @@ Reglas del diagrama:
 - Incluir el endpoint final al que llega el JSON construido
 - Si un JSON no llega directamente a un HTTP sino que alimenta otro JSON,
   mostrarlo con una flecha lateral
+- Marcar explícitamente los `json:ParseJSON` intermedios, porque son los que
+  crean la dependencia de orden al recrear Data Structures
 
 **Por qué se construyen los JSONs a mano:**
 Si el escenario usa `json:CreateJSON` para llamar a una API que tiene módulo
@@ -398,6 +466,11 @@ Estructura:
       Cómo crearla: Connections → Add → [pasos específicos]
       ⚠️ [Advertencia si aplica, ej: incluir prefijo "Bearer " en el campo Key]
 - [ ] **[Nombre conexión 2]** ...
+
+### Recrear Data Structures (si hay módulos json:CreateJSON)
+- [ ] Abrir cada módulo `json:CreateJSON` con Data Structure en rojo
+- [ ] Para cada uno: Data structure → Add → [nombre] → Generator → pegar JSON de muestra (ver sección JSONs) → Save
+- [ ] Respetar el orden indicado en la sección JSONs si hay dependencias entre estructuras
 
 ### Configurar módulo CLIENT (si existe)
 - [ ] Campo `[nombre]`: [qué valor poner y cómo obtenerlo]
